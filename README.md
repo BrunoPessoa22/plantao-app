@@ -33,12 +33,15 @@ só agenda após confirmação explícita, LGPD-mínimo (só nome + convênio).
 | Var | Obrigatória | Default |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | sim (sem ela o chat responde "aguardando configuração") | — |
-| `ADMIN_TOKEN` | sim em produção | `plantao-admin-demo` |
+| `ADMIN_TOKEN` | sim (sem ela: token aleatório gerado no boot, /admin fica inacessível) | — |
 | `PLANTAO_MODEL` | não | `claude-opus-5` |
 | `PLANTAO_FALLBACK_MODEL` | não | `claude-opus-4-8` |
-| `PLANTAO_EFFORT` | não | `low` |
-| `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_VERIFY_TOKEN` | só para o canal WABA | — |
+| `PLANTAO_EFFORT` | não | `high` |
+| `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_VERIFY_TOKEN`, `WA_APP_SECRET` | só para o canal WABA (`WA_APP_SECRET` valida a assinatura do webhook) | — |
 | `DATA_DIR` | não | `/data` (container) |
+
+Admin auth: `Authorization: Bearer <ADMIN_TOKEN>` (nunca query string). O digest fecha o dia
+no fuso da clínica (America/Sao_Paulo).
 
 ## Rodar local
 
@@ -59,3 +62,6 @@ ANTHROPIC_API_KEY=... uvicorn app.main:app --reload
 - SQLite efêmero no container (redeploy zera dados) — anexar volume persistente no Coolify quando virar piloto real.
 - Uma clínica hard-coded (`DEMO_CLINIC`) — multi-tenant é a etapa seguinte (config por cliente no DB).
 - Sem integração Google Agenda/iClinic ainda — o motor de agenda é próprio; conectores são o próximo passo do onboarding real.
+- Sem rate limiting no `/api/chat` público (demo) — adicionar limite por IP antes de divulgar o link amplamente.
+- Histórico persiste só o texto das mensagens (contexto de ferramentas vive dentro do turno) — suficiente porque o motor de agenda é determinístico; persistir `content_json` completo é melhoria futura.
+- Deploy single-worker (SQLite + locks in-process). Não escalar réplicas sem trocar a persistência.

@@ -44,35 +44,62 @@ td b{color:var(--white)}
   <table id="convs"><thead><tr><th>Canal</th><th>Última mensagem</th><th>Status</th></tr></thead><tbody></tbody></table>
 </div>
 <script>
+// token lives only in memory — never in localStorage (XSS blast-radius control)
+function row(cells) {
+  const tr = document.createElement('tr');
+  for (const c of cells) {
+    const td = document.createElement('td');
+    if (c && c.tag) {
+      const s = document.createElement('span'); s.className = 'tag'; s.textContent = c.tag; td.appendChild(s);
+    } else if (c && c.bold) {
+      const b = document.createElement('b'); b.textContent = c.bold; td.appendChild(b);
+    } else {
+      td.textContent = String(c);
+    }
+    tr.appendChild(td);
+  }
+  return tr;
+}
+function fill(sel, rows, emptyMsg, cols) {
+  const tb = document.querySelector(sel);
+  tb.replaceChildren();
+  if (!rows.length) {
+    const tr = document.createElement('tr'); const td = document.createElement('td');
+    td.colSpan = cols; td.textContent = emptyMsg; tr.appendChild(td); tb.appendChild(tr);
+    return;
+  }
+  for (const r of rows) tb.appendChild(row(r));
+}
 async function load(token) {
-  const r = await fetch('/api/admin/overview?token=' + encodeURIComponent(token));
+  const r = await fetch('/api/admin/overview', { headers: { 'Authorization': 'Bearer ' + token } });
   if (!r.ok) { alert('Token inválido'); return false; }
   const d = await r.json();
   document.getElementById('gate').classList.add('hidden');
   document.getElementById('panel').classList.remove('hidden');
-  document.getElementById('dt').textContent = 'Hoje · ' + d.digest.date + ' (UTC)';
+  document.getElementById('dt').textContent = 'Hoje · ' + d.digest.date + ' (America/Sao_Paulo)';
   const cards = [
     [d.digest.conversas, 'Conversas atendidas'],
     [d.digest.agendamentos, 'Agendamentos fechados'],
     [d.digest.transbordos, 'Transbordos pro humano'],
     [d.digest.reclamacoes, 'Reclamações sinalizadas'],
   ];
-  document.getElementById('cards').innerHTML = cards.map(c =>
-    '<div class="card"><div class="n">' + c[0] + '</div><div class="l">' + c[1] + '</div></div>').join('');
-  document.querySelector('#appts tbody').innerHTML = d.agendamentos.map(a =>
-    '<tr><td><b>' + a.start_iso.replace('T', ' ').slice(0, 16) + '</b></td><td>' + a.patient_name +
-    '</td><td>' + a.service_id + '</td><td>' + a.professional_id + '</td><td>' + a.convenio + '</td></tr>'
-  ).join('') || '<tr><td colspan="5">Nenhum agendamento ainda.</td></tr>';
-  document.querySelector('#convs tbody').innerHTML = d.conversas.map(c =>
-    '<tr><td>' + c.channel + '</td><td>' + (c.last_text || '').slice(0, 90) + '</td><td>' +
-    (c.handed_off ? '<span class="tag">humano</span>' : 'IA') + '</td></tr>'
-  ).join('') || '<tr><td colspan="3">Nenhuma conversa ainda.</td></tr>';
-  localStorage.setItem('plantao_admin', token);
+  const cardsEl = document.getElementById('cards');
+  cardsEl.replaceChildren();
+  for (const c of cards) {
+    const div = document.createElement('div'); div.className = 'card';
+    const n = document.createElement('div'); n.className = 'n'; n.textContent = String(c[0]);
+    const l = document.createElement('div'); l.className = 'l'; l.textContent = c[1];
+    div.append(n, l); cardsEl.appendChild(div);
+  }
+  fill('#appts tbody', d.agendamentos.map(a => [
+    { bold: a.start_iso.replace('T', ' ').slice(0, 16) }, a.patient_name, a.service_id, a.professional_id, a.convenio,
+  ]), 'Nenhum agendamento ainda.', 5);
+  fill('#convs tbody', d.conversas.map(c => [
+    c.channel, (c.last_text || '').slice(0, 90), c.handed_off ? { tag: 'humano' } : 'IA',
+  ]), 'Nenhuma conversa ainda.', 3);
   return true;
 }
 document.getElementById('go').addEventListener('click', () => load(document.getElementById('tok').value));
-const saved = localStorage.getItem('plantao_admin');
-if (saved) load(saved);
 </script>
 </body>
 </html>

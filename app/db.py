@@ -33,15 +33,16 @@ CREATE TABLE IF NOT EXISTS appointments (
     patient_name TEXT NOT NULL,
     patient_contact TEXT NOT NULL,
     convenio TEXT NOT NULL,            -- plan name or 'particular'
-    start_iso TEXT NOT NULL,           -- local ISO datetime (America/Sao_Paulo)
+    start_iso TEXT NOT NULL,           -- canonical America/Sao_Paulo ISO datetime
     status TEXT NOT NULL DEFAULT 'confirmada',
-    created_at TEXT NOT NULL,
-    UNIQUE(professional_id, start_iso, status)
+    created_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_slot
+    ON appointments(professional_id, start_iso) WHERE status='confirmada';
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER,
-    kind TEXT NOT NULL,                -- 'agendamento' | 'transbordo' | 'reclamacao' | 'ocorrencia'
+    kind TEXT NOT NULL,                -- 'agendamento' | 'cancelamento' | 'transbordo' | 'reclamacao' | 'ocorrencia'
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -52,8 +53,10 @@ def get_conn() -> sqlite3.Connection:
     global _conn
     if _conn is None:
         path = settings.data_dir / "plantao.db"
-        _conn = sqlite3.connect(str(path), check_same_thread=False)
+        _conn = sqlite3.connect(str(path), check_same_thread=False, timeout=5)
         _conn.row_factory = sqlite3.Row
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA busy_timeout=5000")
         _conn.executescript(SCHEMA)
         _conn.commit()
     return _conn
@@ -72,12 +75,19 @@ def get_or_create_conversation(channel: str, external_id: str) -> int:
         ).fetchone()
         if row:
             return int(row["id"])
-        cur = conn.execute(
-            "INSERT INTO conversations(channel, external_id, created_at) VALUES(?,?,?)",
-            (channel, external_id, _now()),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
+        try:
+            cur = conn.execute(
+                "INSERT INTO conversations(channel, external_id, created_at) VALUES(?,?,?)",
+                (channel, external_id, _now()),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            row = conn.execute(
+                "SELECT id FROM conversations WHERE channel=? AND external_id=?",
+                (channel, external_id),
+            ).fetchone()
+            return int(row["id"])
 
 
 def add_message(conversation_id: int, role: str, text: str) -> None:
@@ -90,13 +100,23 @@ def add_message(conversation_id: int, role: str, text: str) -> None:
         conn.commit()
 
 
-def get_history(conversation_id: int, limit: int = 30) -> list[dict[str, str]]:
+def get_history(conversation_id: int, limit: int = 31) -> list[dict[str, str]]:
     conn = get_conn()
     rows = conn.execute(
         "SELECT role, text FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT ?",
         (conversation_id, limit),
     ).fetchall()
-    return [{"role": r["role"], "content": r["text"]} for r in reversed(rows)]
+    msgs = [{"role": r["role"], "content": r["text"]} for r in reversed(rows)]
+    # Messages API requires messages[0] to be a user turn
+    while msgs and msgs[0]["role"] != "user":
+        msgs.pop(0)
+    return msgs
+
+
+def is_handed_off(conversation_id: int) -> bool:
+    conn = get_conn()
+    row = conn.execute("SELECT handed_off FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return bool(row and row["handed_off"])
 
 
 def mark_handed_off(conversation_id: int) -> None:
@@ -145,6 +165,23 @@ def create_appointment(
             return None
 
 
+def next_appointment_for(patient_contact: str, after_iso: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM appointments WHERE patient_contact=? AND status='confirmada'"
+        " AND start_iso >= ? ORDER BY start_iso ASC LIMIT 1",
+        (patient_contact, after_iso),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def cancel_appointment(appointment_id: int) -> None:
+    with _lock:
+        conn = get_conn()
+        conn.execute("UPDATE appointments SET status='cancelada' WHERE id=?", (appointment_id,))
+        conn.commit()
+
+
 def upcoming_appointments(limit: int = 50) -> list[dict]:
     conn = get_conn()
     rows = conn.execute(
@@ -154,22 +191,23 @@ def upcoming_appointments(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def digest(date_prefix: str) -> dict:
-    """Counts for a local date (YYYY-MM-DD) based on event/message timestamps (UTC-stored)."""
+def digest(start_utc_iso: str, end_utc_iso: str, label: str) -> dict:
+    """Counts for a UTC time range (computed by the caller from the clinic's local day)."""
     conn = get_conn()
     convs = conn.execute(
-        "SELECT COUNT(DISTINCT conversation_id) AS c FROM messages WHERE created_at LIKE ?",
-        (f"{date_prefix}%",),
+        "SELECT COUNT(DISTINCT conversation_id) AS c FROM messages WHERE created_at >= ? AND created_at < ?",
+        (start_utc_iso, end_utc_iso),
     ).fetchone()["c"]
     def count(kind: str) -> int:
         return conn.execute(
-            "SELECT COUNT(*) AS c FROM events WHERE kind=? AND created_at LIKE ?",
-            (kind, f"{date_prefix}%"),
+            "SELECT COUNT(*) AS c FROM events WHERE kind=? AND created_at >= ? AND created_at < ?",
+            (kind, start_utc_iso, end_utc_iso),
         ).fetchone()["c"]
     return {
-        "date": date_prefix,
+        "date": label,
         "conversas": convs,
         "agendamentos": count("agendamento"),
+        "cancelamentos": count("cancelamento"),
         "transbordos": count("transbordo"),
         "reclamacoes": count("reclamacao"),
     }
