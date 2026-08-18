@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plantão · Relatório do dono</title>
+<style>
+:root{--bg:#081209;--panel:#0F2015;--green:#2EBD6B;--mint:#8FE3B4;--white:#F4F7F4;
+  --dim:rgba(238,244,239,.78);--faint:rgba(238,244,239,.5);--line:rgba(238,244,239,.14);--ink:#06130B}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--white);font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;padding:28px 20px;max-width:860px;margin:0 auto}
+h1{font-size:22px;margin-bottom:4px}
+.sub{color:var(--faint);font-size:13px;margin-bottom:24px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:28px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.card .n{font-size:34px;font-weight:800;color:var(--green)}
+.card .l{font-size:12.5px;color:var(--dim);margin-top:4px}
+h2{font-size:15px;color:var(--mint);margin:22px 0 10px;text-transform:uppercase;letter-spacing:.08em}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);color:var(--dim)}
+th{color:var(--faint);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+td b{color:var(--white)}
+.tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:var(--green);color:var(--ink);font-weight:700}
+#gate{margin:60px auto;max-width:340px;text-align:center}
+#gate input{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--white);padding:11px 14px;font-size:14px;margin:14px 0}
+#gate button{background:var(--green);color:var(--ink);border:none;border-radius:8px;padding:11px 22px;font-weight:700;cursor:pointer}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div id="gate">
+  <h1>Relatório do dono</h1>
+  <p class="sub">Informe o token de administrador.</p>
+  <input id="tok" type="password" placeholder="ADMIN_TOKEN">
+  <button id="go">Entrar</button>
+</div>
+<div id="panel" class="hidden">
+  <h1>Clínica Vida — relatório</h1>
+  <p class="sub" id="dt"></p>
+  <div class="cards" id="cards"></div>
+  <h2>Próximos agendamentos</h2>
+  <table id="appts"><thead><tr><th>Quando</th><th>Paciente</th><th>Serviço</th><th>Profissional</th><th>Convênio</th></tr></thead><tbody></tbody></table>
+  <h2>Conversas recentes</h2>
+  <table id="convs"><thead><tr><th>Canal</th><th>Última mensagem</th><th>Status</th></tr></thead><tbody></tbody></table>
+</div>
+<script>
+async function load(token) {
+  const r = await fetch('/api/admin/overview?token=' + encodeURIComponent(token));
+  if (!r.ok) { alert('Token inválido'); return false; }
+  const d = await r.json();
+  document.getElementById('gate').classList.add('hidden');
+  document.getElementById('panel').classList.remove('hidden');
+  document.getElementById('dt').textContent = 'Hoje · ' + d.digest.date + ' (UTC)';
+  const cards = [
+    [d.digest.conversas, 'Conversas atendidas'],
+    [d.digest.agendamentos, 'Agendamentos fechados'],
+    [d.digest.transbordos, 'Transbordos pro humano'],
+    [d.digest.reclamacoes, 'Reclamações sinalizadas'],
+  ];
+  document.getElementById('cards').innerHTML = cards.map(c =>
+    '<div class="card"><div class="n">' + c[0] + '</div><div class="l">' + c[1] + '</div></div>').join('');
+  document.querySelector('#appts tbody').innerHTML = d.agendamentos.map(a =>
+    '<tr><td><b>' + a.start_iso.replace('T', ' ').slice(0, 16) + '</b></td><td>' + a.patient_name +
+    '</td><td>' + a.service_id + '</td><td>' + a.professional_id + '</td><td>' + a.convenio + '</td></tr>'
+  ).join('') || '<tr><td colspan="5">Nenhum agendamento ainda.</td></tr>';
+  document.querySelector('#convs tbody').innerHTML = d.conversas.map(c =>
+    '<tr><td>' + c.channel + '</td><td>' + (c.last_text || '').slice(0, 90) + '</td><td>' +
+    (c.handed_off ? '<span class="tag">humano</span>' : 'IA') + '</td></tr>'
+  ).join('') || '<tr><td colspan="3">Nenhuma conversa ainda.</td></tr>';
+  localStorage.setItem('plantao_admin', token);
+  return true;
+}
+document.getElementById('go').addEventListener('click', () => load(document.getElementById('tok').value));
+const saved = localStorage.getItem('plantao_admin');
+if (saved) load(saved);
+</script>
+</body>
+</html>
